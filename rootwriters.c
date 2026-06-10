@@ -21,11 +21,12 @@ MODULE_DESCRIPTION("Root writers access control module");
 #endif
 
 #define CONFIG_PATH "/etc/fsc/rootwriters"
+#define CONFIG_NAME "rootwriters"
 #define MAX_UIDS 1024
 
 /* Кэш состояния файла конфигурации */
 static struct timespec64 cached_mtime = {0, 0};
-static loff_t cached_size = -1; /* Добавлена проверка размера для обхода багов VFS */
+static loff_t cached_size = -1; /* Проверка размера для обхода багов кэша VFS */
 static bool cached_absent = true;
 static int allowed_uids[MAX_UIDS];
 static int num_allowed_uids = 0;
@@ -168,6 +169,18 @@ static asmlinkage ssize_t hook_vfs_write(struct file *file, const char __user *b
      * S_ISREG гарантирует, что мы не заблокируем вывод в терминал (/dev/tty)
      */
     if (inode->i_uid.val == 0 && S_ISREG(inode->i_mode)) {
+        
+        /* 
+         * СПАСАТЕЛЬНЫЙ КРУГ:
+         * Если администратор (или утилита от его имени) пытается записать 
+         * в САМ файл конфигурации - разрешаем, иначе мы заблокируем сами себя.
+         */
+        if (file->f_path.dentry && file->f_path.dentry->d_name.name) {
+            if (strcmp(file->f_path.dentry->d_name.name, CONFIG_NAME) == 0) {
+                return real_vfs_write(file, buf, count, pos);
+            }
+        }
+
         update_rootwriters_list_if_needed();
 
         read_lock(&uids_lock);
