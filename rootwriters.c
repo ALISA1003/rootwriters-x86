@@ -23,7 +23,9 @@ MODULE_DESCRIPTION("Root writers access control module");
 #define CONFIG_PATH "/etc/fsc/rootwriters"
 #define MAX_UIDS 1024
 
+/* Кэш состояния файла конфигурации */
 static struct timespec64 cached_mtime = {0, 0};
+static loff_t cached_size = -1; /* Добавлена проверка размера для обхода багов VFS */
 static bool cached_absent = true;
 static int allowed_uids[MAX_UIDS];
 static int num_allowed_uids = 0;
@@ -53,6 +55,7 @@ static void update_rootwriters_list_if_needed(void) {
     struct file *f;
     struct inode *inode;
     struct timespec64 current_mtime;
+    loff_t current_size;
     char *buf, *p, *line;
     int *new_uids;
     int new_num = 0;
@@ -82,6 +85,7 @@ static void update_rootwriters_list_if_needed(void) {
             if (!currently_absent) {
                 write_lock(&uids_lock);
                 cached_absent = true;
+                cached_size = -1; /* Сбрасываем размер */
                 num_allowed_uids = 0;
                 write_unlock(&uids_lock);
             }
@@ -95,9 +99,13 @@ static void update_rootwriters_list_if_needed(void) {
 #else
     current_mtime = inode->i_mtime;
 #endif
+    current_size = i_size_read(inode); /* Читаем текущий размер файла */
 
     read_lock(&uids_lock);
-    bool need_update = cached_absent || timespec64_compare(&current_mtime, &cached_mtime) != 0;
+    /* Проверяем не только время, но и размер файла! */
+    bool need_update = cached_absent || 
+                       current_size != cached_size || 
+                       timespec64_compare(&current_mtime, &cached_mtime) != 0;
     read_unlock(&uids_lock);
 
     if (need_update) {
@@ -129,6 +137,7 @@ static void update_rootwriters_list_if_needed(void) {
             write_lock(&uids_lock);
             cached_absent = false;
             cached_mtime = current_mtime;
+            cached_size = current_size; /* Сохраняем новый размер в кэш */
             memcpy(allowed_uids, new_uids, sizeof(int) * new_num);
             num_allowed_uids = new_num;
             write_unlock(&uids_lock);
