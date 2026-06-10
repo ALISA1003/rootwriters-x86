@@ -63,7 +63,7 @@ run_test() {
     
     # Попытка записи от имени обычного пользователя
     # Используем timeout на случай зависания
-    sudo -u "$TEST_USER" bash -c "echo 'test_data' > $TEST_FILE" 2>/dev/null
+    echo "test_data" | sudo -u "$TEST_USER" tee "$TEST_FILE" > /dev/null 2>&1
     local result=$?
 
     if [ "$expected" == "success" ] && [ $result -eq 0 ]; then
