@@ -51,12 +51,16 @@ run_test() {
 # Функция безопасного обновления конфига
 update_config() {
     local content="$1"
-    rm -f "$CONFIG_FILE" 
+    
+    # Искусственная задержка, чтобы mtime гарантированно изменился
+    # (компенсирует низкую точность часов виртуальной файловой системы)
+    sleep 1.1 
+    
+    rm -f "$CONFIG_FILE"
     if [ "$content" != "EMPTY" ] && [ "$content" != "ABSENT" ]; then
         echo -e "$content" > /tmp/temp_rw_config
         mv /tmp/temp_rw_config "$CONFIG_FILE"
         chown root:root "$CONFIG_FILE"
-        touch "$CONFIG_FILE" # <-- ВОТ ЭТО ИСПРАВЛЯЕТ ПРОБЛЕМУ С MTIME
     elif [ "$content" == "EMPTY" ]; then
         touch "$CONFIG_FILE"
         chown root:root "$CONFIG_FILE"
