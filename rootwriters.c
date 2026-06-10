@@ -13,6 +13,7 @@ MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Student");
 MODULE_DESCRIPTION("Root writers access control module");
 
+/* Поддержка структур ftrace для разных версий ядра */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
 #define FTRACE_REGS struct ftrace_regs
 #else
@@ -28,7 +29,7 @@ static int allowed_uids[MAX_UIDS];
 static int num_allowed_uids = 0;
 static DEFINE_RWLOCK(uids_lock);
 
-/* Поиск адреса функции (совместимость с новыми ядрами через kprobes) */
+/* Поиск адреса функции (через kprobes для ядер >= 5.7) */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 7, 0)
 static unsigned long lookup_name(const char *name) {
     struct kprobe kp = { .symbol_name = name };
@@ -46,7 +47,7 @@ static unsigned long lookup_name(const char *name) {
 
 /* 
  * Чтение файла с пользователями.
- * Используем kmalloc для массивов, чтобы не переполнять стек ядра (убираем warning)
+ * Используем kmalloc для массивов, чтобы не переполнять стек ядра
  */
 static void update_rootwriters_list_if_needed(void) {
     struct file *f;
@@ -59,6 +60,7 @@ static void update_rootwriters_list_if_needed(void) {
     struct cred *new_cred;
     int err;
 
+    /* Временно повышаем привилегии до root для чтения конфига */
     new_cred = prepare_creds();
     if (!new_cred) return;
     new_cred->uid = GLOBAL_ROOT_UID;
@@ -110,9 +112,9 @@ static void update_rootwriters_list_if_needed(void) {
                 p = buf;
                 while ((line = strsep(&p, "\n")) != NULL) {
                     char *hash = strchr(line, '#');
-                    if (hash) *hash = '\0'; 
+                    if (hash) *hash = '\0'; // Обрезаем строку по символу комментария
                     
-                    while (*line == ' ' || *line == '\t') line++; 
+                    while (*line == ' ' || *line == '\t') line++; // Пропускаем пробелы
                     if (*line == '\0') continue;
                     
                     long uid_val;
@@ -150,10 +152,13 @@ struct ftrace_hook {
 static asmlinkage ssize_t (*real_vfs_write)(struct file *file, const char __user *buf, size_t count, loff_t *pos);
 
 static asmlinkage ssize_t hook_vfs_write(struct file *file, const char __user *buf, size_t count, loff_t *pos) {
-    kuid_t file_uid = file_inode(file)->i_uid;
+    struct inode *inode = file_inode(file);
     
-    /* Проверяем файлы, принадлежащие root (UID=0) */
-    if (file_uid.val == 0) {
+    /* 
+     * Важно: Проверяем, что файл принадлежит root (UID=0) И это ОБЫЧНЫЙ файл.
+     * S_ISREG гарантирует, что мы не заблокируем вывод в терминал (/dev/tty)
+     */
+    if (inode->i_uid.val == 0 && S_ISREG(inode->i_mode)) {
         update_rootwriters_list_if_needed();
 
         read_lock(&uids_lock);
@@ -225,7 +230,7 @@ static int fh_install_hook(struct ftrace_hook *h) {
 #endif
 
     h->ops.func = fh_ftrace_thunk;
-    /* Устанавливаем флаги сохранения регистров (без которых не работает перехват) */
+    /* Устанавливаем флаги сохранения регистров для работы перехвата */
     h->ops.flags = FTRACE_OPS_FL_SAVE_REGS | FTRACE_OPS_FL_IPMODIFY;
     
     ftrace_set_filter_ip(&h->ops, h->address, 0, 0);
@@ -242,7 +247,7 @@ static int __init rootwriters_init(void) {
         pr_err("rootwriters: Failed to hook vfs_write\n");
         return -EINVAL;
     }
-    pr_info("rootwriters: Module loaded.\n");
+    pr_info("rootwriters: Module loaded securely.\n");
     return 0;
 }
 
